@@ -17,6 +17,7 @@
 
 import hwpe_stream_package::*;
 import hci_package::*;
+import datamover_package::*;
 
 module datamover_streamer #(
   parameter int unsigned TCDM_FIFO_DEPTH = 2,
@@ -40,28 +41,40 @@ module datamover_streamer #(
   output flags_streamer_t        flags_o
 );
 
-  // we "sacrifice" 1 word of memory interface bandwidth in order to support realignment at a byte boundary
+  // We "sacrifice" 1 word of memory interface bandwidth in order to support
+  // realignment at a byte boundary.
   localparam BW_ALIGNED = BW-32;
   flags_fifo_t tcdm_fifo_flags;
 
+  // "Virtual" HCI TCDM interfaces. Interface [0] maps loads (coming from
+  // and HCI source) and interface [1] maps stores (coming from an HCI sink).
   hci_core_intf #(
     .DW ( BW )
   ) virt_tcdm [1:0] (
     .clk ( clk_i )
   );
 
+  // "Virtual" TCDM interface, used to embody data after mixing loads and
+  // stores, but before the TCDM FIFO (if present).
   hci_core_intf #(
     .DW ( BW )
-  ) tcdm_prefifo [0:0] (
+  ) tcdm_prefifo (
     .clk ( clk_i )
   );
-
+  
+  // "Virtual" TCDM interface, used to embody data after the TCDM FIFO
+  // (if present) but before the load filter. Notice this is technically
+  // an array of interfaces, with one single instance inside. This is
+  // useful because HCI muxes expect an array of output interfaces.
   hci_core_intf #(
     .DW ( BW )
   ) tcdm_prefilter [0:0] (
     .clk ( clk_i )
   );
 
+  // Standard HCI core source. The DATA_WIDTH parameter is referred to
+  // the HWPE-Stream, since the source also performs realignment, it will
+  // expose a 32-bit larger HCI TCDM interface.
   hci_core_source #(
     .DATA_WIDTH ( BW )
   ) i_source (
@@ -72,10 +85,13 @@ module datamover_streamer #(
     .enable_i    ( 1'b1                          ),
     .tcdm        ( virt_tcdm [0]                 ),
     .stream      ( data_in                       ),
-    .ctrl_i      ( ctrl_i.data_in_ctrl           ),
-    .flags_o     ( flags_o.data_in_flags         )
+    .ctrl_i      ( ctrl_i.data_in_source_ctrl    ),
+    .flags_o     ( flags_o.data_in_source_flags  )
   );
 
+  // Standard HCI core sink. The DATA_WIDTH parameter is referred to
+  // the HWPE-Stream, since the sink also performs realignment, it will
+  // expose a 32-bit larger HCI TCDM interface.
   hci_core_sink #(
     .DATA_WIDTH ( BW )
   ) i_sink (
@@ -86,24 +102,32 @@ module datamover_streamer #(
     .enable_i    ( 1'b1                        ),
     .tcdm        ( virt_tcdm [1]               ),
     .stream      ( data_out                    ),
-    .ctrl_i      ( ctrl_i.data_out_ctrl        ),
-    .flags_o     ( flags_o.data_out_flags      )
+    .ctrl_i      ( ctrl_i.data_out_sink_ctrl   ),
+    .flags_o     ( flags_o.data_out_sink_flags )
   );
 
   generate
     if(TCDM_FIFO_DEPTH > 0) begin : use_fifo_gen
-      hci_core_mux_static #(
-        .NB_IN_CHAN  ( 2  ),
-        .NB_OUT_CHAN ( 1  ),
+
+      // TCDM muxing is not possible in general before a FIFO, because
+      // there is no standard way to couple a response with the channel
+      // that requested it. Here we bypass the issue by using a mixer
+      // that is specifically designed for a LOAD-exclusive channel and
+      // a STORE-exclusive channel. It will couple any valid response to
+      // the LOAD channel exclusively.
+      hci_core_load_store_mixer #(
         .DW          ( BW )
       ) i_ld_st_mux_static (
-        .clk_i   ( clk_i                ),
-        .rst_ni  ( rst_ni               ),
-        .clear_i ( clear_i              ),
-        .in      ( virt_tcdm            ),
-        .out     ( tcdm_prefifo         )
+        .clk_i    ( clk_i                ),
+        .rst_ni   ( rst_ni               ),
+        .clear_i  ( clear_i              ),
+        .in_load  ( virt_tcdm[0]         ),
+        .in_store ( virt_tcdm[1]         ),
+        .out      ( tcdm_prefifo         )
       );
 
+      // The HCI core FIFO the request path from the response path, easing
+      // timing closure when integrating the accelerator in a cluster.
       hci_core_fifo #(
         .FIFO_DEPTH ( TCDM_FIFO_DEPTH ),
         .DW         ( BW              ),
@@ -114,11 +138,14 @@ module datamover_streamer #(
         .rst_ni      ( rst_ni                      ),
         .clear_i     ( clear_i                     ),
         .flags_o     ( tcdm_fifo_flags             ),
-        .tcdm_slave  ( tcdm_prefifo[0]             ),
+        .tcdm_slave  ( tcdm_prefifo                ),
         .tcdm_master ( tcdm_prefilter[0]           )
       );
     end
     else begin : dont_use_fifo_gen
+
+      // If not using a FIFO, it is possible to use a standard mux instead
+      // of a mixer.
       hci_core_mux_dynamic #(
         .NB_IN_CHAN  ( 2  ),
         .NB_OUT_CHAN ( 1  ),
@@ -131,10 +158,14 @@ module datamover_streamer #(
         .out     ( tcdm_prefilter       )
       );
       assign tcdm_fifo_flags.empty = 1'b1;
+
     end
   endgenerate
 
-  // filter out r_valid strobes generated when the TCDM access is a write
+  // The HCI core filter is meant to filter out r_valid strobes that the
+  // cluster may generate even when the TCDM access is a write. These 
+  // pollute HCI TCDM FIFOs and mixers, and it is better to remove them
+  // altogether.
   hci_core_r_valid_filter i_tcdm_filter (
     .clk_i       ( clk_i                ),
     .rst_ni      ( rst_ni               ),

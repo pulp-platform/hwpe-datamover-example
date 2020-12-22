@@ -7,7 +7,8 @@ datamover:
     -L hci_lib,
   ]
   files: [
-    rtl/datamover_streamer.sv
+    rtl/datamover_package.sv,
+    rtl/datamover_streamer.sv,
     rtl/datamover_engine.sv,
     rtl/datamover_top.sv,
   ]
