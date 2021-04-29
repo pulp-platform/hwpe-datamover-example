@@ -15,11 +15,12 @@
  * Authors:  Francesco Conti <f.conti@unibo.it>
  */
 
-import hwpe_ctrl_package::*;
-import hci_package::*;
-import datamover_package::*;
 
-module datamover_top #(
+module datamover_top
+  import hwpe_ctrl_package::*;
+  import hci_package::*;
+  import datamover_package::*;
+ #(
   parameter int unsigned ID        = 10,
   parameter int unsigned BW        = 288,
   parameter int unsigned N_CORES   = 8,

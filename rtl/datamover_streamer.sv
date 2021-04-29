@@ -15,11 +15,12 @@
  * Authors:  Francesco Conti <f.conti@unibo.it>
  */
 
-import hwpe_stream_package::*;
-import hci_package::*;
-import datamover_package::*;
 
-module datamover_streamer #(
+module datamover_streamer
+  import hwpe_stream_package::*;
+  import hci_package::*;
+  import datamover_package::*;
+#(
   parameter int unsigned TCDM_FIFO_DEPTH = 2,
   parameter int unsigned BW = 32
 ) (
