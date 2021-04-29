@@ -15,10 +15,11 @@
  * Authors:  Francesco Conti <f.conti@unibo.it>
  */
 
-import hwpe_stream_package::*;
-import hci_package::*;
 
-module datamover_engine #(
+module datamover_engine
+  import hwpe_stream_package::*;
+  import hci_package::*;
+#(
   parameter int unsigned FIFO_DEPTH = 4,
   parameter int unsigned BW_ALIGNED = 32
 ) (
